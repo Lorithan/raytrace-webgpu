@@ -1,4 +1,4 @@
-class Vec3 {
+export class Vec3 {
   public x: number = 0;
   public y: number = 0;
   public z: number = 0;
@@ -44,58 +44,75 @@ class Vec3 {
 
 const UP = new Vec3(0, 1, 0);
 
-class Sphere {
+export class Material {
+  public albedo: Vec3;
+  public metallic: number;
+  public roughness: number;
+
+  constructor(albedo: Vec3, metallic: number, roughness: number) {
+    this.albedo = albedo;
+    this.metallic = metallic;
+    this.roughness = roughness;
+  }
+}
+
+export class Sphere {
   center: Vec3;
   radius: number;
+  material: Material;
 
-  constructor(center: Vec3 = new Vec3(), radius: number = 1) {
+  constructor(center: Vec3 = new Vec3(), radius: number = 1, material: Material) {
     this.center = center;
     this.radius = radius;
+    this.material = material;
   }
 
-  toBuffer() {
-    let buffer = new Float32Array(4);
+  public toBuffer() {
+    let buffer = new Float32Array(12);
 
+    // Sphere data
     buffer[0] = this.center.x;
     buffer[1] = this.center.y;
     buffer[2] = this.center.z;
     buffer[3] = this.radius;
 
+    // Material
+    buffer[4] = this.material.albedo.x;
+    buffer[5] = this.material.albedo.y;
+    buffer[6] = this.material.albedo.z;
+
+    buffer[7] = this.material.metallic;
+    buffer[8] = this.material.roughness;
+    // Padding
+    buffer[9] = 1.0; // Padding
+    buffer[10] = 0.0;
+    buffer[11] = 0.0;
+
     return buffer;
   }
 }
 
-class Camera {
+export class Camera {
   origin: Vec3;
-  lookAt: Vec3;
-  forward: Vec3;
-  right: Vec3;
-  up: Vec3;
-  fov: number;
-  aspectRatio: number = 1.0;
-  halfH: number;
-  halfW: number;
-
+  bottomLeft: Vec3;
   horizontal: Vec3;
   vertical: Vec3;
-  bottomLeft: Vec3;
 
   constructor(origin = new Vec3(-1.0, 0.0, 0.0), lookAt = new Vec3(1.0, 0.0, 0.0), fov = 80.0, aspectRatio = 1.0) {
     this.origin = origin;
-    this.lookAt = lookAt;
-    this.fov = fov;
-    this.aspectRatio = aspectRatio;
-    this.forward = lookAt.sub(origin).normalize();
-    this.right = UP.cross(this.forward);
-    this.up = this.right.cross(this.forward);
-    this.halfH = Math.tan(fov / 2);
-    this.halfW = this.halfH * aspectRatio;
-    this.horizontal = this.right.scale(2 * this.halfW);
-    this.vertical = this.up.scale(2 * this.halfH);
-    this.bottomLeft = origin.sub(this.right.scale(this.halfW)).sub(this.up.scale(this.halfH)).sub(this.forward);
+
+    const forward = lookAt.sub(origin).normalize();
+    const right = forward.cross(UP);
+    const up = right.cross(forward);
+    const fovRadians = fov * (Math.PI / 180);
+    const halfH = Math.tan(fovRadians / 2);
+    const halfW = halfH * aspectRatio;
+    this.horizontal = right.scale(2 * halfW);
+    this.vertical = up.scale(2 * halfH);
+    this.bottomLeft = origin.sub(right.scale(halfW)).sub(up.scale(halfH)).add(forward);
   }
 
-  toBuffer() {
+  public toBuffer() {
     let buffer = new Float32Array(16);
 
     // Origin
@@ -126,7 +143,48 @@ class Camera {
   }
 }
 
-class Scene {
-  sphere: Sphere = new Sphere();
-  camera: Camera = new Camera();
+export class Light {
+  position: Vec3;
+  color: Vec3;
+
+  constructor(position: Vec3, color: Vec3) {
+    this.position = position;
+    this.color = color;
+  }
+
+  toBuffer() {
+    let buffer = new Float32Array(8);
+
+    // Position
+    buffer[0] = this.position.x;
+    buffer[1] = this.position.y;
+    buffer[2] = this.position.z;
+    buffer[3] = 1.0;
+
+    // Color
+    buffer[4] = this.color.x;
+    buffer[5] = this.color.y;
+    buffer[6] = this.color.z;
+    buffer[7] = 1.0;
+
+    return buffer;
+  }
+}
+
+export class Scene {
+  sphere: Sphere = new Sphere(
+    new Vec3(0, 0, -1),                               // Center
+    0.5,                                              // Radius
+    new Material(new Vec3(0.0, 0.7, 0.4), 0.1, 0.9),  // Material
+  );
+  camera: Camera = new Camera(
+    new Vec3(0, 0, 1),   // origin
+    new Vec3(0, 0, -1),  // lookAt
+    60,                  // fov
+    800 / 600            // aspectRatio
+  );
+  light: Light = new Light(
+    new Vec3(1.0, 1.0, 0.5),
+    new Vec3(3.0, 3.0, 3.0),
+  );
 }
