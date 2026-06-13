@@ -83,10 +83,6 @@ export class Sphere {
 
     buffer[7] = this.material.metallic;
     buffer[8] = this.material.roughness;
-    // Padding
-    buffer[9] = 1.0; // Padding
-    buffer[10] = 0.0;
-    buffer[11] = 0.0;
 
     return buffer;
   }
@@ -172,11 +168,18 @@ export class Light {
 }
 
 export class Scene {
-  sphere: Sphere = new Sphere(
-    new Vec3(0, 0, -1),                               // Center
-    0.5,                                              // Radius
-    new Material(new Vec3(0.0, 0.7, 0.4), 0.1, 0.9),  // Material
-  );
+  spheres: Sphere[] = [
+    new Sphere(
+      new Vec3(0, 0, -1),                               // Center
+      0.5,                                              // Radius
+      new Material(new Vec3(0.0, 0.7, 0.4), 0.1, 0.9),  // Material
+    ),
+    new Sphere(
+      new Vec3(-1, -1, -1),                               // Center
+      0.5,                                              // Radius
+      new Material(new Vec3(0.1, 0.1, 0.4), 0.25, 0.3),  // Material
+    ),
+  ];
   camera: Camera = new Camera(
     new Vec3(0, 0, 1),   // origin
     new Vec3(0, 0, -1),  // lookAt
@@ -187,4 +190,13 @@ export class Scene {
     new Vec3(1.0, 1.0, 0.5),
     new Vec3(3.0, 3.0, 3.0),
   );
+
+  toBuffer() {
+    const floatsPerSphere = 12;
+    const buffer = new Float32Array(this.spheres.length * floatsPerSphere);
+    this.spheres.forEach((sphere, i) => {
+      buffer.set(sphere.toBuffer(), i * floatsPerSphere);
+    });
+    return buffer;
+  }
 }

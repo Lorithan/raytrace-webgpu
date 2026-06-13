@@ -18,9 +18,12 @@ const COMPUTE_SHADER = `
     albedo: vec3f,
     metallic: f32,
     roughness: f32,
+    pad0: f32,
+    pad1: f32,
+    pad2: f32,
   }
   
-  @group(0) @binding(2) var<uniform> sphere: Sphere;
+  @group(0) @binding(2) var<storage, read> spheres: array<Sphere>;
 
   struct Light {
     pos: vec3f,
@@ -90,9 +93,20 @@ const COMPUTE_SHADER = `
     
     let rayOrigin = camera.origin;
     let rayDir = camera.bottomLeft + flippedUV.x * camera.horizontal + flippedUV.y * camera.vertical - camera.origin;
-    let hit = hitSphere(sphere, rayOrigin, rayDir);
-    if (hit > 0.0) {
-      let hitPoint = rayOrigin + hit * rayDir;
+    
+    var closestHit = -1.0;
+    var closestSphere = 0u;
+    for (var i = 0u; i < arrayLength(&spheres); i++) {
+      let t = hitSphere(spheres[i], rayOrigin, rayDir);
+      if (t > 0.0 && (closestHit < 0.0 || t < closestHit)) {
+        closestHit = t;
+        closestSphere = i;
+      }
+    }
+
+    if (closestHit > 0.0) {
+      let sphere = spheres[closestSphere];
+      let hitPoint = rayOrigin + closestHit * rayDir;
       let N = normalize(hitPoint - sphere.center);
       let V = normalize(rayOrigin - hitPoint);
       let L = normalize(light.pos - hitPoint);
@@ -191,10 +205,10 @@ export class Renderer {
     });
     this.device.queue.writeBuffer(this.cameraBuffer, 0, cameraBuffer);
 
-    const sceneBuffer = this.scene.sphere.toBuffer();
+    const sceneBuffer = this.scene.toBuffer();
     this.sceneBuffer = this.device.createBuffer({
       size: sceneBuffer.byteLength,
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
     });
     this.device.queue.writeBuffer(this.sceneBuffer, 0, sceneBuffer);
 
