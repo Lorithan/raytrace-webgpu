@@ -9,7 +9,12 @@ async function main() {
 
   const renderer = new Renderer(canvas);
   await renderer.init();
-  renderer.render();
+
+  function loop() {
+    renderer.render();
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
 }
 
 main().catch(console.error);

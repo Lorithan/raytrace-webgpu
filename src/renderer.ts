@@ -1,7 +1,10 @@
 const COMPUTE_SHADER = `
   const PI = 3.14159265358979;
+  const MAX_BOUNCES = 5;
 
-  @group(0) @binding(0) var output: texture_storage_2d<rgba8unorm, write>;
+  @group(0) @binding(0) var accumWrite: texture_storage_2d<rgba32float, write>;
+  @group(0) @binding(1) var accumRead: texture_2d<f32>;
+  @group(0) @binding(2) var<uniform> frameCount: u32;
 
   struct Camera {
     origin: vec3f,
@@ -10,7 +13,7 @@ const COMPUTE_SHADER = `
     vertical: vec3f,
   }
 
-  @group(0) @binding(1) var<uniform> camera: Camera;
+  @group(0) @binding(3) var<uniform> camera: Camera;
 
   struct Sphere {
     center: vec3f,
@@ -22,8 +25,8 @@ const COMPUTE_SHADER = `
     pad1: f32,
     pad2: f32,
   }
-  
-  @group(0) @binding(2) var<storage, read> spheres: array<Sphere>;
+
+  @group(0) @binding(4) var<storage, read> spheres: array<Sphere>;
 
   struct Light {
     pos: vec3f,
@@ -32,7 +35,7 @@ const COMPUTE_SHADER = `
     pad2: f32,
   }
 
-  @group(0) @binding(3) var<uniform> light: Light;
+  @group(0) @binding(5) var<uniform> light: Light;
 
   fn hitSphere(sphere: Sphere, rayOrigin: vec3f, rayDir: vec3f) -> f32 {
     let oc = sphere.center - rayOrigin;
@@ -83,39 +86,105 @@ const COMPUTE_SHADER = `
     return (diffuse + specular) * NdotL * light.color;
   }
 
+  fn buildFrame(N: vec3f) -> mat3x3f {
+    var up = vec3f(0.0, 1.0, 0.0);
+    if (abs(N.y) > 0.999) {
+      up = vec3f(1.0, 0.0, 0.0);
+    }
+      let T = normalize(cross(up, N));
+      let B = cross(N, T);
+      return mat3x3f(T, B, N);
+  }
+
+  fn cosineHemisphere(N: vec3f, r1: f32, r2: f32) -> vec3f {
+    let phi = 2.0 * PI * r1;
+    let x = cos(phi) * sqrt(r2);
+    let y = sin(phi) * sqrt(r2);
+    let z = sqrt(1.0 - r2);
+    let d = vec3f(x, y, z);
+
+    let frame = buildFrame(N);
+    return frame * d;
+  }
+
+  fn hash(seed: u32) -> f32 {
+    var s = seed;
+    s ^= s << 13u;
+    s ^= s >> 17u;
+    s ^= s << 5u;
+    return f32(s) / f32(0xffffffffu);
+  }
+
+  fn skyColor(dir: vec3f) -> vec3f {
+    let t = max(dir.y, 0.0) * 0.5 + 0.5;
+    let horizon = vec3f(1.0, 1.0, 1.0);
+    let zenith = vec3f(0.3, 0.5, 1.0);
+    return mix(horizon, zenith, t);
+  }
+
   @compute @workgroup_size(8, 8)
   fn main(@builtin(global_invocation_id) id: vec3u) {
-    let dims = textureDimensions(output);
+    let dims = textureDimensions(accumWrite);
     if (id.x >= dims.x || id.y >= dims.y) { return; }
 
     let uv = vec2f(f32(id.x) / f32(dims.x), f32(id.y) / f32(dims.y));
     let flippedUV = vec2f(uv.x, 1.0 - uv.y);
     
-    let rayOrigin = camera.origin;
-    let rayDir = camera.bottomLeft + flippedUV.x * camera.horizontal + flippedUV.y * camera.vertical - camera.origin;
-    
-    var closestHit = -1.0;
-    var closestSphere = 0u;
-    for (var i = 0u; i < arrayLength(&spheres); i++) {
-      let t = hitSphere(spheres[i], rayOrigin, rayDir);
-      if (t > 0.0 && (closestHit < 0.0 || t < closestHit)) {
-        closestHit = t;
-        closestSphere = i;
+    var rayOrigin = camera.origin;
+    var rayDir = camera.bottomLeft + flippedUV.x * camera.horizontal + flippedUV.y * camera.vertical - camera.origin;
+    var throughput = vec3f(1.0);
+    var color = vec3f(0.0);
+
+    for (var bounce = 0; bounce < MAX_BOUNCES; bounce++) {
+      var closestHit = -1.0;
+      var closestSphere = 0u;
+      for (var i = 0u; i < arrayLength(&spheres); i++) {
+        let t = hitSphere(spheres[i], rayOrigin, rayDir);
+        if (t > 0.0 && (closestHit < 0.0 || t < closestHit)) {
+          closestHit = t;
+          closestSphere = i;
+        }
+      }
+      
+      if (closestHit > 0.0) {
+        let sphere = spheres[closestSphere];
+        let hitPoint = rayOrigin + closestHit * rayDir;
+        let N = normalize(hitPoint - sphere.center);
+
+        let lightDir = normalize(light.pos - hitPoint);
+        let lightDist = length(light.pos - hitPoint);
+        var occluded = false;
+        for (var j = 0u; j < arrayLength(&spheres); j++) {
+          let t = hitSphere(spheres[j], hitPoint + N * 0.001, lightDir);
+          if (t > 0.0 && t < lightDist) {
+            occluded = true;
+            break;
+          }
+        }
+
+        if (!occluded) {
+          let V = normalize(rayOrigin - hitPoint);
+          let direct = cook_torrance(N, V, lightDir, sphere.albedo, sphere.metallic, sphere.roughness);
+          color += throughput * direct;
+        }
+
+        throughput *= sphere.albedo;
+
+        let seed = id.x + id.y * dims.x + frameCount * dims.x * dims.y + u32(bounce) * 2u;
+        let r1 = hash(seed);
+        let r2 = hash(seed + 1u);
+        rayDir = cosineHemisphere(N, r1, r2);
+        rayOrigin = hitPoint;
+      } else {
+        color += throughput * skyColor(rayDir);
+        break;
       }
     }
-
-    if (closestHit > 0.0) {
-      let sphere = spheres[closestSphere];
-      let hitPoint = rayOrigin + closestHit * rayDir;
-      let N = normalize(hitPoint - sphere.center);
-      let V = normalize(rayOrigin - hitPoint);
-      let L = normalize(light.pos - hitPoint);
-      let ambient = sphere.albedo * 0.1;
-      let color = cook_torrance(N, V, L, sphere.albedo, sphere.metallic, sphere.roughness) + ambient;
-      textureStore(output, vec2i(id.xy), vec4f(color, 1.0));
-    } else {
-      textureStore(output, vec2i(id.xy), vec4f(0.52, 0.8, 0.92, 1.0));  
-    }
+    
+    let clamped = min(color, vec3f(10.0));
+    let prev = textureLoad(accumRead, vec2i(id.xy), 0).rgb;
+    let accumulated = (prev * f32(frameCount) + clamped) / f32(frameCount + 1);
+    textureStore(accumWrite, vec2i(id.xy), vec4f(accumulated, 1.0));
   }
 `;
 
@@ -155,7 +224,9 @@ const BLIT_SHADER = `
 
   @fragment
   fn fs_main(in: VertexOut) -> @location(0) vec4f {
-    return textureSample(screen_texture, screen_sampler, in.uv);
+    let hdr = textureSample(screen_texture, screen_sampler, in.uv).rgb;
+    let tonemapped = hdr / (hdr + vec3f(1.0));
+    return vec4f(tonemapped, 1.0);
   }
 `;
 
@@ -167,13 +238,18 @@ export class Renderer {
   private context!: GPUCanvasContext;
   private computePipeline!: GPUComputePipeline;
   private blitPipeline!: GPURenderPipeline;
-  private storageTexture!: GPUTexture;
-  private computeBindGroup!: GPUBindGroup;
-  private blitBindGroup!: GPUBindGroup;
+  private accumTextureA!: GPUTexture;
+  private accumTextureB!: GPUTexture;
+  private computeBindGroupA!: GPUBindGroup;
+  private computeBindGroupB!: GPUBindGroup;
+  private blitBindGroupA!: GPUBindGroup;
+  private blitBindGroupB!: GPUBindGroup;
   private scene!: Scene;
   private cameraBuffer!: GPUBuffer;
   private sceneBuffer!: GPUBuffer;
   private lightBuffer!: GPUBuffer;
+  private frameCount!: number;
+  private frameBuffer!: GPUBuffer;
 
 
   constructor(canvas: HTMLCanvasElement) {
@@ -184,19 +260,24 @@ export class Renderer {
 
     const adapter = await navigator.gpu.requestAdapter();
     if (!adapter) throw new Error('No GPU adapter found.');
-    this.device = await adapter.requestDevice();
+    this.device = await adapter.requestDevice({
+      requiredFeatures: ['float32-filterable'],
+    });
 
     this.context = this.canvas.getContext('webgpu') as GPUCanvasContext;
     const canvasFormat = navigator.gpu.getPreferredCanvasFormat();
     this.context.configure({ device: this.device, format: canvasFormat });
 
-    // Storage texture — written by compute, read by blit
-    this.storageTexture = this.device.createTexture({
+    // Accumulated textures
+    const accumDesc = {
       size: [this.canvas.width, this.canvas.height],
-      format: 'rgba8unorm',
+      format: 'rgba32float' as GPUTextureFormat,
       usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
-    });
+    };
+    this.accumTextureA = this.device.createTexture(accumDesc);
+    this.accumTextureB = this.device.createTexture(accumDesc);
 
+    // Scene buffer
     this.scene = new Scene();
     const cameraBuffer = this.scene.camera.toBuffer();
     this.cameraBuffer = this.device.createBuffer({
@@ -226,13 +307,35 @@ export class Renderer {
       compute: { module: computeModule, entryPoint: 'main' },
     });
 
-    this.computeBindGroup = this.device.createBindGroup({
+    this.frameCount = 0;
+    const frameBuffer = new Uint32Array([0]);
+    this.frameBuffer = this.device.createBuffer({
+      size: 16,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+    this.device.queue.writeBuffer(this.frameBuffer, 0, frameBuffer);
+
+    this.computeBindGroupA = this.device.createBindGroup({
       layout: this.computePipeline.getBindGroupLayout(0),
       entries: [
-        { binding: 0, resource: this.storageTexture.createView() },
-        { binding: 1, resource: { buffer: this.cameraBuffer } },
-        { binding: 2, resource: { buffer: this.sceneBuffer } },
-        { binding: 3, resource: { buffer: this.lightBuffer } },
+        { binding: 0, resource: this.accumTextureA.createView() },
+        { binding: 1, resource: this.accumTextureB.createView() },
+        { binding: 2, resource: { buffer: this.frameBuffer } },
+        { binding: 3, resource: { buffer: this.cameraBuffer } },
+        { binding: 4, resource: { buffer: this.sceneBuffer } },
+        { binding: 5, resource: { buffer: this.lightBuffer } },
+      ],
+    });
+
+    this.computeBindGroupB = this.device.createBindGroup({
+      layout: this.computePipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: this.accumTextureB.createView() },
+        { binding: 1, resource: this.accumTextureA.createView() },
+        { binding: 2, resource: { buffer: this.frameBuffer } },
+        { binding: 3, resource: { buffer: this.cameraBuffer } },
+        { binding: 4, resource: { buffer: this.sceneBuffer } },
+        { binding: 5, resource: { buffer: this.lightBuffer } },
       ],
     });
 
@@ -248,11 +351,18 @@ export class Renderer {
       primitive: { topology: 'triangle-list' },
     });
 
-    const sampler = this.device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
-    this.blitBindGroup = this.device.createBindGroup({
+    const sampler = this.device.createSampler({ magFilter: 'nearest', minFilter: 'nearest' });
+    this.blitBindGroupA = this.device.createBindGroup({
       layout: this.blitPipeline.getBindGroupLayout(0),
       entries: [
-        { binding: 0, resource: this.storageTexture.createView() },
+        { binding: 0, resource: this.accumTextureA.createView() },
+        { binding: 1, resource: sampler },
+      ],
+    });
+    this.blitBindGroupB = this.device.createBindGroup({
+      layout: this.blitPipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: this.accumTextureB.createView() },
         { binding: 1, resource: sampler },
       ],
     });
@@ -261,10 +371,22 @@ export class Renderer {
   render() {
     const encoder = this.device.createCommandEncoder();
 
+    // Update frame counter
+    this.device.queue.writeBuffer(this.frameBuffer, 0, new Uint32Array([this.frameCount]));
+
+    // Pick bind group based on frame parity
+    const computeBindGroup = this.frameCount % 2 === 0
+      ? this.computeBindGroupA
+      : this.computeBindGroupB;
+
+    const blitBindGroup = this.frameCount % 2 === 0
+      ? this.blitBindGroupA
+      : this.blitBindGroupB;
+
     // Compute pass
     const compute = encoder.beginComputePass();
     compute.setPipeline(this.computePipeline);
-    compute.setBindGroup(0, this.computeBindGroup);
+    compute.setBindGroup(0, computeBindGroup);
     compute.dispatchWorkgroups(
       Math.ceil(this.canvas.width / 8),
       Math.ceil(this.canvas.height / 8)
@@ -281,10 +403,11 @@ export class Renderer {
       }]
     });
     blit.setPipeline(this.blitPipeline);
-    blit.setBindGroup(0, this.blitBindGroup);
+    blit.setBindGroup(0, blitBindGroup);
     blit.draw(6);
     blit.end();
 
     this.device.queue.submit([encoder.finish()]);
+    this.frameCount++;
   }
 }

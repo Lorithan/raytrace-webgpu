@@ -169,16 +169,10 @@ export class Light {
 
 export class Scene {
   spheres: Sphere[] = [
-    new Sphere(
-      new Vec3(0, 0, -1),                               // Center
-      0.5,                                              // Radius
-      new Material(new Vec3(0.0, 0.7, 0.4), 0.1, 0.9),  // Material
-    ),
-    new Sphere(
-      new Vec3(-1, -1, -1),                               // Center
-      0.5,                                              // Radius
-      new Material(new Vec3(0.1, 0.1, 0.4), 0.25, 0.3),  // Material
-    ),
+    new Sphere(new Vec3(0, 0, -1), 0.5, new Material(new Vec3(0.8, 0.3, 0.1), 0.0, 0.9)),   // matte orange
+    new Sphere(new Vec3(1.2, 0, -1), 0.5, new Material(new Vec3(0.8, 0.8, 0.8), 1.0, 0.05)), // polished silver
+    new Sphere(new Vec3(-1.2, 0, -1), 0.5, new Material(new Vec3(0.9, 0.6, 0.1), 0.8, 0.4)), // rough gold
+    new Sphere(new Vec3(0, -100.5, -1), 100, new Material(new Vec3(0.5, 0.5, 0.5), 0.0, 0.8)), // ground
   ];
   camera: Camera = new Camera(
     new Vec3(0, 0, 1),   // origin
@@ -187,8 +181,8 @@ export class Scene {
     800 / 600            // aspectRatio
   );
   light: Light = new Light(
-    new Vec3(1.0, 1.0, 0.5),
-    new Vec3(3.0, 3.0, 3.0),
+    new Vec3(2.0, 4.0, 1.5), // Position
+    new Vec3(8.0, 8.0, 8.0), // Color
   );
 
   toBuffer() {
