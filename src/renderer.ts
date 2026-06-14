@@ -230,7 +230,7 @@ const BLIT_SHADER = `
   }
 `;
 
-import { Scene } from "./scene";
+import { Scene, Camera } from "./scene";
 
 export class Renderer {
   private canvas: HTMLCanvasElement;
@@ -272,7 +272,7 @@ export class Renderer {
     const accumDesc = {
       size: [this.canvas.width, this.canvas.height],
       format: 'rgba32float' as GPUTextureFormat,
-      usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
+      usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
     };
     this.accumTextureA = this.device.createTexture(accumDesc);
     this.accumTextureB = this.device.createTexture(accumDesc);
@@ -409,5 +409,28 @@ export class Renderer {
 
     this.device.queue.submit([encoder.finish()]);
     this.frameCount++;
+  }
+
+  updateCamera(camera: Camera) {
+    const buffer = camera.toBuffer();
+    this.device.queue.writeBuffer(this.cameraBuffer, 0, buffer);
+    this.resetAccumulation();
+  }
+
+  resetAccumulation() {
+    const zeros = new Float32Array(this.canvas.width * this.canvas.height * 4);
+    this.device.queue.writeTexture(
+      { texture: this.accumTextureA },
+      zeros,
+      { bytesPerRow: this.canvas.width * 4 * 4 },
+      [this.canvas.width, this.canvas.height]
+    );
+    this.device.queue.writeTexture(
+      { texture: this.accumTextureB },
+      zeros,
+      { bytesPerRow: this.canvas.width * 4 * 4 },
+      [this.canvas.width, this.canvas.height]
+    );
+    this.frameCount = 0;
   }
 }
